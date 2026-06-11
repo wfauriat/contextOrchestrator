@@ -55,3 +55,37 @@ Append-only design journal (pyarchAgent convention). Newest entries at the botto
   Handle the no-persona case deliberately at M2 or budget attribution lies.
 - **Next:** finish M1 properly — design the sqlite schema + `Repository` port + row↔pydantic
   mapping, and tackle the #D serialization seam (tagged union JSON) since persistence forces it.
+
+### 2026-06-11 — M1 persistence: Repository port + sqlite adapter (segment/version half)
+
+- **Built (`orchestrator/`):** `ports.py` — `Repository(ABC)` + `SegmentNotFound` domain
+  exception. `sqlite_repo.py` — `SqliteRepository(Repository)`: schema bootstrap
+  (`segment` + `segment_version`, composite PK `(segment_id, version_no)`, self-FK), the four
+  pure mapping fns (`segment_to_row`/`row_to_segment`/`version_to_row`/`row_to_version`), and
+  the five M1 methods. `tests/test_sqlite_repo.py` — 11 tests; `pyproject` testpaths now
+  includes `orchestrator/tests`.
+- **Verified:** **56 pass** (45 substrate + 11 new). Round-trip equality incl. `derived_from`
+  rebuilt as a **tuple** (not list); atomic rollback of a rejected append pinned as a test.
+- **Built via tutoring loop:** done hands-on in `scratch_repo.py` (kept in-tree) first — the user
+  wrote the schema, the monotonic-append transaction, and the mappings; promoted to modules
+  after each piece was proven. The scratch file is the learning artifact, kept for now.
+- **Decided — port scope = segment/version only:** `save_assembly`/`get_assembly` and the run
+  methods (design §4.3) deferred to M2 with the layers that need them (`Run` isn't even a type
+  yet). One abstraction at a time; no NotImplementedError stubs.
+- **Decided — port shape (3 calls beyond §4.3's list):** (1) added `get_segment` — the resolver
+  needs `Segment.type` to build a `ResolvedSegment`; (2) write methods echo back the persisted
+  object so the impl owns canonical state (e.g. bumped `latest_version_no`); (3) `SegmentNotFound`
+  as a domain error so callers never catch `sqlite3.*` (keeps the Postgres swap clean). Monotonic
+  violation stays `ValueError` (arg error, not not-found).
+- **Decided — derived_from = single JSON TEXT column** (over two self-FK columns): we only read
+  lineage back for display, never query on it. Encode `json.dumps(list(...))`, decode
+  `tuple(json.loads(...))` — the tuple rebuild matters for frozen-model equality.
+- **Cleanup vs scratch:** first-version handling — fresh segment has `latest_version_no=None`,
+  so the guard is `expected = (latest or 0) + 1`; first append must be v1.
+- **Learned (DB craft):** composite PK as table-level constraint; `?`-placeholders only;
+  type affinity is advisory (coerces, doesn't enforce); `with conn:` rolls back the *whole open
+  transaction*, not just the block — uncommitted setup got swept up until seed was committed;
+  `PRAGMA foreign_keys=ON` is per-connection and ignored inside a txn (set right after connect);
+  `model_dump_json()` not `dict()+json.dumps` for datetime/enum (previews #D).
+- **Next:** the #D serialization seam proper (tagged-union JSON for `Message`) when we persist an
+  `AssembledWindow`; then `AssemblySpec` persistence + the `Run` type/trace sink (M2).
